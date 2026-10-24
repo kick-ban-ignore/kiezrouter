@@ -6,8 +6,17 @@ data/
 *.duckdb
 *.duckdb.wal
 
-# Große Varianten der Karte (HTML, je ~9 MB) – lokal erzeugen
-outputs/maps/
+# Generierte Analyse-Outputs (Charts, CSVs, Karten)
+outputs/
+
+# Sicherheitsrelevante Dateien (selbstsigniertes Zertifikat / Schlüssel u.a.)
+kiezrouter.crt
+kiezrouter.key
+*.key
+*.crt
+*.pem
+.env
+*.env
 
 # Editor/OS
 __pycache__/

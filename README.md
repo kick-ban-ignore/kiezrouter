@@ -4,8 +4,6 @@ Web-App für Routenplanung auf dem OSM-Straßennetz von Berlin: Adresssuche,
 U/S-Bahn-Stationen als POIs, Multi-Stop-Routing, Auto- und Fußgänger-Modus,
 mobil-optimiert, offline-fähige Geocodierung.
 
-![KiezRouter](outputs/charts/routen_abdeckung.png)
-
 ## Schnellstart
 
 ```bash
@@ -55,18 +53,8 @@ data/berlin/                  Rohdaten (gitignored) + DuckDBs + Graph-Caches
 
 Download: `bash data/download.sh` (XLSX-URL wird automatisch gelesen).
 
-## Depot-Standortanalyse (SQL + GIS)
-
-Zusätzlich enthält das Repo eine SQL/GIS-Analyse zur Depot-Standortwahl in
-Berlin (Ortsteil-Ebene, DuckDB Spatial): Greedy-p-Median für k = 20/40,
-Autobahnanbindung, 15-Minuten-Stadt, Routenanalyse mit Dijkstra. Ergebnisse
-und Diagramme liegen unter `outputs/`. Details und Kennzahlen siehe
-`sql/` und `scripts/run_pipeline_*.py`.
-
 ## Quellenvermerk / Attribution
 
 Grenz- und Straßendaten © OpenStreetMap-Mitwirkende, verfügbar über die
 [Geofabrik](https://download.geofabrik.de)-Extracts (ODbL).
-Einwohnerzahlen © Amt für Statistik Berlin-Brandenburg
-(Einwohnerregisterstatistik SB_A01-05-00, CC BY 3.0 DE).
 Basiskarten: Tiles © Esri; alternativ © OpenStreetMap-Mitwirkende (FOSSGIS).

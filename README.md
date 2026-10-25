@@ -1,60 +1,124 @@
-# KiezRouter – Interaktiver Routenplaner für Berlin
+# KiezRouter
 
-Web-App für Routenplanung auf dem OSM-Straßennetz von Berlin: Adresssuche,
-U/S-Bahn-Stationen als POIs, Multi-Stop-Routing, Auto- und Fußgänger-Modus,
-mobil-optimiert, offline-fähige Geocodierung.
-
-## Schnellstart
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-bash data/download.sh                       # Rohdaten (~140 MB) laden
-.venv/bin/python scripts/build_address_index.py   # Adressindex (~330 k Adressen)
-.venv/bin/python scripts/build_station_index.py   # U/S-Bahn-Stationen (~345)
-.venv/bin/python scripts/route_app.py              # HTTP  -> http://127.0.0.1:8777
-.venv/bin/python scripts/route_app.py --https     # HTTPS -> https://127.0.0.1:8443 (nötig für GPS am Handy)
-```
-
-## Features
-
-- **Adresssuche** mit Live-Autocomplete: ß/ss-Normalisierung, Hausnummer-Priorisierung, Deduplizierung
-- **U-Bahn- und S-Bahn-Stationen** als durchsuchbare POIs (in derselben Suchleiste)
-- **Multi-Stop-Routing**: beliebig viele Zwischenstopps, Drag-and-Drop bzw. ↑/↓ zum Umsortieren
-- **Auto- und Fußgänger-Modus**: getrennte Graphen (Auto: Kfz-Klassen + Einbahn; Fuß: Fußwege, Pfade, Treppen, bidirektional)
-- **Karte**: Start/Ziel/Stop-Marker (farbig nummeriert), Route, Straßenliste, Brücken/Tunnel-Markierung
-- **Export**: GPX-Download, Link kopieren, Share-URL mit Hash
-- **Letzte Routen** (localStorage)
-- **Mobil-optimiert**: Bottom Sheet, 44 px Touch-Targets, GPS-Standort, Karten-Zentrierung oberhalb des Menüs
-- **HTTPS**: selbstsigniertes Zertifikat mit LAN-IP im SAN (für GPS auf dem Handy)
-- **Offline-Geocodierung**: keine externen Dienste, alles lokal aus dem OSM-PBF
-
-## Architektur
+> 🚗→🚶 Offline routing on the Berlin OSM street graph — addresses, U/S-Bahn POIs,
+> multi-stop, car & pedestrian modes. Static analysis SQL included, no server stack.
 
 ```
-scripts/route_app.py          Flask-loses http.server-Backend (JSON-API)
-scripts/route_app.html        Frontend (Leaflet, vanilla JS)
-scripts/build_address_index.py OSM-PBF -> adressen-Tabelle (DuckDB)
-scripts/build_station_index.py OSM-PBF -> stationen-Tabelle (DuckDB)
-scripts/run_pipeline_routen.py Routierbarer Graph (Auto/Fuß, Dijkstra, CSV-Outputs)
-sql/e01_filter_roads.sql      Fahrzeugtaugliche Klassen (EPSG:25833)
-sql/e01_filter_roads_walk.sql  Fußgängertaugliche Klassen
-data/berlin/                  Rohdaten (gitignored) + DuckDBs + Graph-Caches
+   ┌────────────────────────────────────────────────────────┐
+   │  ┌──────────┐   ┌──────────┐   ┌──────────┐            │
+   │  │  start   │──▶│  stop 1  │──▶│  stop n  │──▶ ┌─────┐ │
+   │  └──────────┘   └──────────┘   └──────────┘    │ziel │ │
+   │                                                └─────┘ │
+   │   Dijkstra · 632k nodes · 664k edges · ~3 s cold       │
+   └────────────────────────────────────────────────────────┘
 ```
 
-## Datenquellen
+---
 
-| Quelle | Inhalt | Lizenz |
-|---|---|---|
-| Geofabrik OSM-Extract Berlin: `gis_osm_roads_free_1`, `gis_osm_transport_free_1` | Straßennetz, Stationen | ODbL – © OpenStreetMap-Mitwirkende |
-| Geofabrik OSM-PBF `berlin-latest.osm.pbf` | Adressen, Stationen (Tags) | ODbL |
-| Amt für Statistik Berlin-Brandenburg (SB_A01-05-00) | Einwohner je Ortsteil | CC BY 3.0 DE |
-| BKG VG250-EW | Bezirks-/Ortsteilgrenzen | dl-de/by-2-0 |
+**Status** · in progress · supported modes: `car`, `walk`
 
-Download: `bash data/download.sh` (XLSX-URL wird automatisch gelesen).
+| Badge | Detail |
+|---|---|
+| ![stack](https://img.shields.io/badge/stack-duckdb%20%2B%20osmium%20%2B%20vanillaJS-blue) | ![python](https://img.shields.io/badge/python-3.12-green) |
+| ![license](https://img.shields.io/badge/data-ODbL-yellow) | ![size](https://img.shields.io/badge/address_index-289k-red) |
 
-## Quellenvermerk / Attribution
+## TL;DR
 
-Grenz- und Straßendaten © OpenStreetMap-Mitwirkende, verfügbar über die
-[Geofabrik](https://download.geofabrik.de)-Extracts (ODbL).
-Basiskarten: Tiles © Esri; alternativ © OpenStreetMap-Mitwirkende (FOSSGIS).
+Local web app, zero framework in the backend (`http.server`), zero framework in the
+frontend (Leaflet + vanilla JS). All geocoding and routing offline, data from a
+single Geofabrik extract + a single OSM PBF — nothing leaves your machine.
+
+```
+.venv/bin/python scripts/route_app.py          # http://127.0.0.1:8777
+.venv/bin/python scripts/route_app.py --https  # https://127.0.0.1:8443 (self-signed, for mobile GPS)
+```
+
+## Stack
+
+| Layer      | Tech                                                        |
+|------------|-------------------------------------------------------------|
+| Backend    | Python 3.12 · stdlib `http.server` · DuckDB 1.5 (spatial)   |
+| Graph      | Dijkstra on `epsg:25833` UTM-33N projected edge list        |
+| Indexing   | pyosmium (`osmium.SimpleHandler`) for PBF → DuckDB row scan |
+| Frontend   | Leaflet 1.9.3 · vanilla JS · AbortController debounce       |
+| Transport  | `http.server` or `ssl.SSLContext` (self-signed cert w/ LAN IP in SAN) |
+| Caching    | pickled adjacency list, invalidated by DB mtime             |
+
+## Endpoints
+
+| Method | Path                             | Params                                       | Response                                      |
+|--------|----------------------------------|----------------------------------------------|-----------------------------------------------|
+| GET    | `/health`                        | –                                            | `{"ready": bool, "walk_ready": bool}`         |
+| GET    | `/geocode`                       | `q` (street [+ house number])                | up to 8 `{label, lon, lat}`                   |
+| GET    | `/stationen`                     | `q` (station name)                           | max 8 `{name, typ, lon, lat}`                 |
+| GET    | `/route`                         | `from_lat`/`from_lon`/`to_lat`/`to_lon` **or** `points=lat,lon;lat,lon;…` + `mode=car\|walk` | `{km, minuten, luft_km, inflation, strassen[], route[], start, ziel}` |
+
+Railway POIs (`station=subway` → **U-Bahn**, `light_rail`/`train` → **S-Bahn**) are
+merged into `/geocode` results as `Name (U-Bahn)` / `Name (S-Bahn)`.
+
+## Graph internals
+
+```
+e01_filter_roads.sql       ┌──────────────────────────────────────────────┐
+---  car edges         ──▶ │  kanten (fclass, osm_id, oneway, maxspeed,   │
+e01_filter_roads_walk.sql  │         default_v_kmh, bridge, tunnel)       │
+---  foot edges        ──▶ └──────────────────────────────────────────────┘
+                                          │
+                                          ▼  ST_Transform('EPSG:4326' → 'EPSG:25833')
+                           ┌──────────────────────────────────────────────┐
+   run_pipeline_routen.py──▶│  edges: (u, v, seconds, meters, id, fwd_only)│
+                           │  adj:   u → [(v, cost, edge_id), …]           │
+                           └──────────────────────────────────────────────┘
+```
+
+| Mode | Edge classes included | Direction   | Speed model                     |
+|------|----------------------|-------------|---------------------------------|
+| car  | motorway, trunk, primary, secondary, tertiary, unclassified, residential, living_street, service (+links) | oneway-aware | `maxspeed × 0.85` (fast classes) / `× 0.60` (urban), + 8 s junction delay (`deg ≥ 3`) |
+| walk | footway, path, pedestrian, steps, track_*, bridleway, cycleway, living_street, residential, service, unclassified, tertiary*, secondary*, primary* | bidirectional | 5 km/h (3 km/h on `steps`) |
+
+Per-edge speed comes from `maxspeed` when plausible (5–130 km/h), else the
+class default. No turn-penalties, no traffic profiles, no closures.
+
+### Cost function
+
+```
+cost(u → v) = seg_m / (v_kmh / 3.6)          # edge traversal
+            + 8 [s] · 1[deg(u) ≥ 3]          # junction delay (car)
+```
+
+The resulting seconds are what you see as `Fahrzeit`/`Laufzeit`.
+
+## Feature pipeline
+
+| Step | Why it matters |
+|------|----------------|
+| ß/ss normalization + `lower()` on both sides | otherwise ~55 % of streets (ß) wouldn't match on `upper()` (Python folds `ß → SS`, DuckDB keeps `ẞ`) |
+| exact-match first on `hnr` (ORDER BY CASE <br> WHEN hnr = ? THEN 0 ELSE 1 END) | avoids `Straße 5` suggestions dominated by `15/25/5x` |
+| `GROUP BY strasse, hnr` | OSM has ≥ 1 node per address (entrance + building centroid) |
+| degenerate pick of `min(lat/lon)` per node | deterministic coordinate per (strasse, hnr) |
+| walking mode skips `oneway_entropy()` | pedestrians are direction-invariant |
+| graph cache `route_graph{,_walk}.pkl` | cold start 26 s → ~8–10 s (580 MB → 12 MB pickle) |
+
+## Mobile / GPS
+
+Browsers require a **secure context** for `navigator.geolocation` — plain HTTP
+on a LAN IP won't do. `--https` serves a self-signed cert whose SAN contains the
+LAN IP, so phones can accept it once and then use GPS.
+
+```
+gitignore: data/ (raw OSM, PBF, .duckdb), outputs/, kiezrouter.crt/.key,
+           *.key|*.crt|*.pem|.env — nothing secret ever lands in the repo.
+```
+
+## Data pipeline
+
+```
+geofabrik-berlin-latest-free.shp.zip ──e01_filter_roads.sql──▶ route_edges.duckdb
+berlin-latest.osm.pbf ──(pyosmium nodes)──▶ depot_berlin.duckdb.adressen     (~289k)
+berlin-latest.osm.pbf ──(pyosmium stations)─▶ depot_berlin.duckdb.stationen  (~347)
+```
+
+## Attribution
+
+© OpenStreetMap contributors via [Geofabrik](https://download.geofabrik.de) extracts (ODbL).
+Tiles: Esri World Gray Canvas / OpenStreetMap-DE (FOSSGIS).

@@ -246,6 +246,37 @@ def route_payload_multi(points, mode="car", blocked_ids=None, blocked_meta=None)
     }
 
 
+def blocked_geo(mode, entries):
+    """Blockierte Teilabschnitte als Punkte (Kanten-Mittelpunkte) für die
+    Karten-Anzeige. Liefert (dots [[lat, lon]], applied, ignored, n_edges)."""
+    st = STATE.get(mode)
+    if not st:
+        return [], [], [], 0
+    ids, applied, ignored = blocked_edge_ids(mode, entries)
+    key = tuple(sorted((e.get("s") or "", e.get("f") or "", e.get("t") or "")
+                       for e in entries))
+    cache = st.setdefault("blocked_geo_cache", {})
+    if key in cache:
+        dots = cache[key]
+        return dots, applied, ignored, len(ids)
+    mids = []
+    for i in sorted(ids):
+        u, v = st["edges"][i][0], st["edges"][i][1]
+        mids.append(((u[0] + v[0]) / 2.0, (u[1] + v[1]) / 2.0))
+    con = duckdb.connect()
+    con.execute("LOAD spatial;")
+    dots = []
+    for x, y in mids:
+        lon, lat = con.execute("""
+            SELECT ST_X(p), ST_Y(p) FROM (SELECT ST_Transform(
+                ST_SetCRS(ST_MakePoint(?, ?), 'EPSG:25833'), 'EPSG:4326', true) p)""",
+            [x, y]).fetchone()
+        dots.append([lat, lon])
+    con.close()
+    cache[key] = dots
+    return dots, applied, ignored, len(ids)
+
+
 def _norm(s):
     return s.replace("ß", "ss").replace("ẞ", "ss").lower()
 
@@ -472,6 +503,27 @@ class Handler(BaseHTTPRequestHandler):
                 ORDER BY strasse LIMIT 8""", [f"%{_norm(q)}%"]).fetchall()
             con.close()
             self._json([r[0] for r in rows])
+            return
+        if parse.path == "/blocked/geo":
+            q = urllib.parse.parse_qs(parse.query)
+            mode = q.get("mode", ["car"])[0]
+            if mode not in ("car", "walk"):
+                mode = "car"
+            if not STATE.get(mode):
+                self._json({"error": "Graph wird geladen…", "loading": True}, 503)
+                return
+            raw = q.get("blocked", [""])[0]
+            entries = []
+            if raw.strip():
+                try:
+                    arr = json.loads(raw)
+                    entries = [e for e in arr if isinstance(e, dict) and (e.get("s") or "").strip()]
+                except (ValueError, json.JSONDecodeError) as e:
+                    self._json({"error": f"Ungültiges blocked-Format: {e}"}, 400)
+                    return
+            dots, applied, ignored, n = blocked_geo(mode, entries)
+            self._json({"dots": dots, "blocked_applied": applied,
+                        "blocked_ignored": ignored, "blocked_edges": n})
             return
         if parse.path == "/route":
             q = urllib.parse.parse_qs(parse.query)

@@ -141,6 +141,7 @@ L.control.layers({'Esri Dunkel': baseEsri, 'OpenStreetMap (DE)': baseOsm},
                  {}, {collapsed:true}).addTo(map);
 
 let lineLayer = L.layerGroup().addTo(map);
+let blockLayer = L.layerGroup().addTo(map);   // persistente 🚧-Punkte (unabhängig von Routen)
 const PICK = {};
 const DIRTY = {};
 let markers = {};
@@ -453,8 +454,8 @@ document.getElementById('btnGps').onclick = () => {
 };
 
 // --- Mode toggle ---
-document.getElementById('modeCar').onclick = () => { MODE = 'car'; updateModeButtons(); };
-document.getElementById('modeWalk').onclick = () => { if (document.getElementById('modeWalk').disabled) return; MODE = 'walk'; updateModeButtons(); };
+document.getElementById('modeCar').onclick = () => { MODE = 'car'; updateModeButtons(); refreshBlockedOnMap(); };
+document.getElementById('modeWalk').onclick = () => { if (document.getElementById('modeWalk').disabled) return; MODE = 'walk'; updateModeButtons(); refreshBlockedOnMap(); };
 
 // --- Straßen-Blockierungen (Bauarbeiten / Stau) ---
 // Einträge: {s: Straßenname, f: "von Nr.", t: "bis Nr."} — f/t optional.
@@ -496,6 +497,27 @@ function renderBlockList() {
 function saveBlocked() {
   localStorage.setItem('blockedStreets', JSON.stringify(BLOCKED));
   renderBlockList();
+  refreshBlockedOnMap();
+}
+
+// Rote Punkte für blockierte Teilabschnitte — unabhängig von Routen (blockLayer)
+async function refreshBlockedOnMap() {
+  blockLayer.clearLayers();
+  if (!BLOCKED.length) return;
+  try {
+    const res = await fetch('/blocked/geo?mode=' + MODE + '&blocked=' +
+                            encodeURIComponent(JSON.stringify(BLOCKED)));
+    if (!res.ok) return;
+    const d = await res.json();
+    const renderer = L.canvas({ padding: 0.5 });
+    for (const [lat, lon] of (d.dots || [])) {
+      L.circleMarker([lat, lon], {
+        renderer,
+        radius: 4, color: '#ffffff', weight: 1,
+        fillColor: '#ff1744', fillOpacity: 0.95,
+      }).addTo(blockLayer).bindTooltip('🚧 Blockiert');
+    }
+  } catch (e) { /* still store lassen */ }
 }
 
 function addBlocked() {
@@ -757,6 +779,7 @@ function renderRecent() {
 async function init() {
   const d = await waitReady();
   document.getElementById('loading').style.display = 'none';
+  refreshBlockedOnMap();
   (async () => {
     let wr = d.walk_ready;
     const btn = document.getElementById('modeWalk');

@@ -98,6 +98,10 @@ server state. Response reports `blocked_applied`, `blocked_ignored` (with reason
 and `blocked_edges`. If the blocklist disconnects start/target, the API answers
 *"Ziel nicht erreichbar – Blockierungen zu restriktiv?"* instead of hanging.
 
+`GET /blocked/geo` returns the blocked segments as dot coordinates (edge
+midpoints, WGS84); the frontend draws them as persistent red dots on a
+dedicated map layer — visible immediately, with or without a route.
+
 ### Cost function
 
 ```

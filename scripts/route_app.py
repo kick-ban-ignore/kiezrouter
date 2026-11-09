@@ -124,15 +124,18 @@ def wgs_to_utm(lon, lat):
 
 
 
-def route_payload(src, tgt, mode="car"):
+def route_payload(src, tgt, mode="car", blocked_ids=None, blocked_meta=None):
     st = STATE.get(mode)
     if not st:
         return {"error": "Graph nicht geladen."}
     if src == tgt:
         return {"error": "Start und Ziel identisch."}
-    dist, prev = dijkstra(st["adj"], src)
+    dist, prev = dijkstra(st["adj"], src, blocked_ids)
     if tgt not in dist:
-        return {"error": "Ziel im Graph nicht erreichbar."}
+        msg = "Ziel im Graph nicht erreichbar."
+        if blocked_ids:
+            msg = "Ziel nicht erreichbar – Blockierungen zu restriktiv?"
+        return {"error": msg, **(blocked_meta or {})}
     used = edges_on_path(prev, tgt)
     edges = st["edges"]
     meta = st["meta"]
@@ -171,13 +174,14 @@ def route_payload(src, tgt, mode="car"):
         "route": coords,
         "start": src_named,
         "ziel": tgt_named,
+        **(blocked_meta or {}),
     }
 
 
-def route_payload_multi(points, mode="car"):
+def route_payload_multi(points, mode="car", blocked_ids=None, blocked_meta=None):
     st = STATE.get(mode)
     if not st:
-        return {"error": "Graph nicht geladen."}
+        return {"error": "Graph nicht geladen.", **(blocked_meta or {})}
     if len(points) < 2:
         return {"error": "mindestens 2 Punkte"}
     edges = st["edges"]
@@ -191,9 +195,12 @@ def route_payload_multi(points, mode="car"):
         src, tgt = points[i], points[i + 1]
         if src == tgt:
             continue
-        dist, prev = dijkstra(adj, src)
+        dist, prev = dijkstra(adj, src, blocked_ids)
         if tgt not in dist:
-            return {"error": f"Segment {i+1} nicht erreichbar."}
+            msg = f"Segment {i+1} nicht erreichbar."
+            if blocked_ids:
+                msg = f"Segment {i+1} nicht erreichbar – Blockierungen zu restriktiv?"
+            return {"error": msg, **(blocked_meta or {})}
         used = edges_on_path(prev, tgt)
         road_m = sum(edges[e][3] for e in used)
         total_km += road_m / 1000.0
@@ -234,11 +241,39 @@ def route_payload_multi(points, mode="car"):
         "route": all_coords,
         "start": sn,
         "ziel": tn,
+        **(blocked_meta or {}),
     }
 
 
 def _norm(s):
     return s.replace("ß", "ss").replace("ẞ", "ss").lower()
+
+
+def blocked_edge_ids(mode, names):
+    """Liefert (ids_set, applied, ignored) für eine Liste von Straßennamen.
+    Exakter Match auf den normalisierten Kantennamen (meta[e][1]).
+    meta ist listenindiziert: Listenindex == edge_id.
+    Ergebnis wird pro (mode, names) gecacht."""
+    st = STATE.get(mode)
+    if not st or not names:
+        return set(), [], list(names)
+    key = tuple(sorted(_norm(n) for n in names))
+    cache = st.setdefault("blocked_cache", {})
+    if key in cache:
+        return cache[key]
+    want = {_norm(n) for n in names}
+    ids, applied, seen = set(), [], set()
+    for i, e in enumerate(st["meta"]):
+        nm = _norm(e[1] or "")
+        if nm in want:
+            ids.add(i)
+            if nm not in seen:
+                seen.add(nm)
+                applied.append(e[1])
+    ignored = [n for n in names if _norm(n) not in seen]
+    result = (ids, applied, ignored)
+    cache[key] = result
+    return result
 
 
 def geocode(q):
@@ -347,6 +382,20 @@ class Handler(BaseHTTPRequestHandler):
                     break
             self._json(res)
             return
+        if parse.path == "/streets":
+            q = urllib.parse.parse_qs(parse.query).get("q", [""])[0].strip()
+            if len(q) < 2:
+                self._json([])
+                return
+            con = duckdb.connect(DEPOT_DB, read_only=True)
+            norm_col = "lower(replace(replace(strasse, 'ß', 'ss'), 'ẞ', 'ss'))"
+            rows = con.execute(f"""
+                SELECT DISTINCT strasse FROM adressen
+                WHERE {norm_col} LIKE ?
+                ORDER BY strasse LIMIT 8""", [f"%{_norm(q)}%"]).fetchall()
+            con.close()
+            self._json([r[0] for r in rows])
+            return
         if parse.path == "/route":
             q = urllib.parse.parse_qs(parse.query)
             mode = q.get("mode", ["car"])[0]
@@ -356,6 +405,18 @@ class Handler(BaseHTTPRequestHandler):
             if not st:
                 self._json({"error": "Graph wird geladen…", "loading": True}, 503)
                 return
+            # Straßen-Blockierungen (Bauarbeiten/Stau): Namen -> edge_ids
+            blocked_raw = [n for n in q.get("blocked", [""])[0].split(";") if n.strip()]
+            blocked_ids, applied, ignored = (None, [], [])
+            if blocked_raw:
+                blocked_ids, applied, ignored = blocked_edge_ids(mode, blocked_raw)
+                blocked_meta = {
+                    "blocked_applied": applied,
+                    "blocked_ignored": ignored,
+                    "blocked_edges": len(blocked_ids),
+                }
+            else:
+                blocked_meta = {}
             try:
                 if "points" in q:
                     pts = []
@@ -365,11 +426,11 @@ class Handler(BaseHTTPRequestHandler):
                     if len(pts) < 2:
                         raise ValueError("mindestens 2 Punkte")
                     coords = [nearest(st["adj"], *wgs_to_utm(lo, la)) for la, lo in pts]
-                    self._json(route_payload_multi(coords, mode))
+                    self._json(route_payload_multi(coords, mode, blocked_ids, blocked_meta))
                 elif "from" in q:
                     src = st["snap"][q["from"][0]]
                     tgt = st["snap"][q["to"][0]]
-                    self._json(route_payload(src, tgt, mode))
+                    self._json(route_payload(src, tgt, mode, blocked_ids, blocked_meta))
                 else:
                     src = nearest(st["adj"],
                                   *wgs_to_utm(float(q["from_lon"][0]),
@@ -377,7 +438,7 @@ class Handler(BaseHTTPRequestHandler):
                     tgt = nearest(st["adj"],
                                   *wgs_to_utm(float(q["to_lon"][0]),
                                               float(q["to_lat"][0])))
-                    self._json(route_payload(src, tgt, mode))
+                    self._json(route_payload(src, tgt, mode, blocked_ids, blocked_meta))
             except (KeyError, ValueError) as e:
                 self._json({"error": f"Ungültige Anfrage: {e}"}, 400)
             return

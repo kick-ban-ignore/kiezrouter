@@ -216,7 +216,9 @@ def lcc_share(node_count, adj):
     return best / node_count, best
 
 
-def dijkstra(adj, source):
+def dijkstra(adj, source, blocked=None):
+    """Dijkstra; optional werden Kanten mit edge_id in `blocked` übersprungen
+    (Straßensperren: Bauarbeiten/Stau)."""
     dist = {source: 0.0}
     prev = {}
     heap = [(0.0, source)]
@@ -225,6 +227,8 @@ def dijkstra(adj, source):
         if d > dist.get(u, float("inf")):
             continue
         for v, w, edge_id in adj.get(u, []):
+            if blocked and edge_id in blocked:
+                continue
             nd = d + w
             if nd < dist.get(v, float("inf")):
                 dist[v] = nd

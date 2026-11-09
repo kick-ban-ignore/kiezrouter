@@ -51,7 +51,8 @@ single Geofabrik extract + a single OSM PBF — nothing leaves your machine.
 | GET    | `/health`                        | –                                            | `{"ready": bool, "walk_ready": bool}`         |
 | GET    | `/geocode`                       | `q` (street [+ house number])                | up to 8 `{label, lon, lat}`                   |
 | GET    | `/stationen`                     | `q` (station name)                           | max 8 `{name, typ, lon, lat}`                 |
-| GET    | `/route`                         | `from_lat`/`from_lon`/`to_lat`/`to_lon` **or** `points=lat,lon;lat,lon;…` + `mode=car\|walk` | `{km, minuten, luft_km, inflation, strassen[], route[], start, ziel}` |
+| GET    | `/streets`                       | `q` (street name)                            | max 8 distinct street names                   |
+| GET    | `/route`                         | `from_lat`/`from_lon`/`to_lat`/`to_lon` **or** `points=lat,lon;lat,lon;…` + `mode=car\|walk` + optional `blocked=Name1;Name2` | `{km, minuten, luft_km, inflation, strassen[], route[], start, ziel, blocked_applied[], blocked_ignored[], blocked_edges}` |
 
 Railway POIs (`station=subway` → **U-Bahn**, `light_rail`/`train` → **S-Bahn**) are
 merged into `/geocode` results as `Name (U-Bahn)` / `Name (S-Bahn)`.
@@ -77,7 +78,21 @@ e01_filter_roads_walk.sql  │         default_v_kmh, bridge, tunnel)       │
 | walk | footway, path, pedestrian, steps, track_*, bridleway, cycleway, living_street, residential, service, unclassified, tertiary*, secondary*, primary* | bidirectional | 5 km/h (3 km/h on `steps`) |
 
 Per-edge speed comes from `maxspeed` when plausible (5–130 km/h), else the
-class default. No turn-penalties, no traffic profiles, no closures.
+class default. No turn-penalties, no traffic profiles.
+
+### Blocked streets (Baustellen / Stau)
+
+`/route?...&blocked=Name1;Name2` — streets are blocked by **exact normalized
+name** (ß/ss-folded), resolved to edge-ids via the per-edge `name` metadata.
+Dijkstra skips those edges during expansion; the blocklist lives client-side
+(localStorage) and rides along with every request — no server state.
+
+- Response reports `blocked_applied` (matched names + `blocked_edges` count)
+  and `blocked_ignored` (names with no edge match).
+- If the blocklist disconnects start/target, the API answers with
+  *"Ziel nicht erreichbar – Blockierungen zu restriktiv?"* instead of hanging.
+- Granularity is street-wide (all edges sharing the name), which matches the
+  "Baustelle in Straße X" use case.
 
 ### Cost function
 

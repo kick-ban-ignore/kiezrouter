@@ -61,8 +61,18 @@
   .recent div:hover { background:#2a3040; border-radius:3px; }
   .export { display:flex; gap:4px; margin-top:4px; }
   .export button { flex:1; font-size:11px; padding:4px; }
+  #blockPanel {
+    position:absolute; z-index:1000; top:10px; right:10px; width:300px; max-width:calc(100vw - 20px);
+    background:#1b1f27; color:#eee; padding:12px; border-radius:8px;
+    box-shadow:0 2px 10px rgba(0,0,0,.5); font-size:13px;
+  }
+  .blockEntry { display:flex; align-items:center; gap:6px; padding:4px 6px; margin:2px 0;
+                background:#2a3040; border-radius:4px; font-size:12px; }
+  .blockEntry .nm { flex:1; }
+  .blockEntry .del { cursor:pointer; color:#ff8a8a; padding:0 4px; }
   @media (max-width: 600px) {
     #panel { top:auto; bottom:10px; left:10px; right:10px; width:auto; max-height:60vh; overflow:auto; }
+    #blockPanel { top:auto; bottom:10px; right:10px; width:auto; max-height:60vh; overflow:auto; }
     input, select, button { min-height:44px; font-size:15px; }
     #result { font-size:13px; }
     .sug div { padding:8px 10px; font-size:14px; }
@@ -84,16 +94,7 @@
     <button id="modeWalk" style="flex:1;" disabled>Fuß (lädt…)</button>
   </div>
 
-  <button id="btnBlockToggle" style="font-size:11px;padding:3px 6px;margin:2px 0;width:auto;background:#3a4258;">🚧 Blockierungen (<span id="blockCount">0</span>) ▾</button>
-  <div id="blockBox" style="display:none; border:1px solid #444; border-radius:4px; padding:6px; margin:3px 0;">
-    <div style="display:flex; gap:4px;">
-      <input id="blockInput" placeholder="Straße blockieren…" aria-label="Straße blockieren" style="flex:1;">
-      <button id="btnBlockAdd" title="Straße blockieren" style="width:auto; padding:4px 8px;">+</button>
-    </div>
-    <div id="sugBlock" class="sug" style="display:none"></div>
-    <div id="blockChips" style="display:flex; flex-wrap:wrap; gap:4px; margin-top:4px;"></div>
-    <div class="hint">Blockierte Straßen werden bei der Route umgangen (z. B. Bauarbeiten, Stau).</div>
-  </div>
+  <button id="btnBlockToggle" style="font-size:11px;padding:3px 6px;margin:2px 0;width:auto;background:#3a4258;">🚧 Blockierungen (<span id="blockCount">0</span>)</button>
 
   <button id="btn" style="background:#00b1ff;color:#000;font-weight:bold;">Route berechnen</button>
   <button id="btnClear" style="opacity:.85">Auswahl löschen</button>
@@ -112,6 +113,21 @@
   <div class="recent" id="recentBox"></div>
 </div>
 <div id="map"></div>
+
+<div id="blockPanel" style="display:none;">
+  <h1 style="font-size:13px; margin:0 0 6px;">🚧 Blockierungen</h1>
+  <div style="display:flex; gap:4px;">
+    <input id="blockInput" placeholder="Straße…" aria-label="Straße blockieren" style="flex:1; min-width:0;">
+    <button id="btnBlockAdd" title="Blockieren" style="width:auto; padding:4px 8px;">+</button>
+  </div>
+  <div id="sugBlock" class="sug" style="display:none"></div>
+  <div style="display:flex; gap:4px; margin:3px 0;">
+    <input id="blockFrom" placeholder="von Nr." aria-label="Hausnummer von" style="flex:1; min-width:0;">
+    <input id="blockTo" placeholder="bis Nr." aria-label="Hausnummer bis" style="flex:1; min-width:0;">
+  </div>
+  <div id="blockList"></div>
+  <div class="hint">Ohne Hausnummern wird die ganze Straße blockiert. Mit Bereich (z. B. 1–15) nur der Abschnitt — funktioniert dort, wo OSM Hausnummern liefert.</div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
 <script>
@@ -441,50 +457,74 @@ document.getElementById('modeCar').onclick = () => { MODE = 'car'; updateModeBut
 document.getElementById('modeWalk').onclick = () => { if (document.getElementById('modeWalk').disabled) return; MODE = 'walk'; updateModeButtons(); };
 
 // --- Straßen-Blockierungen (Bauarbeiten / Stau) ---
+// Einträge: {s: Straßenname, f: "von Nr.", t: "bis Nr."} — f/t optional.
 let BLOCKED = [];
-try { BLOCKED = JSON.parse(localStorage.getItem('blockedStreets') || '[]'); } catch (e) { BLOCKED = []; }
+try {
+  const stored = JSON.parse(localStorage.getItem('blockedStreets') || '[]');
+  BLOCKED = stored.map(e => typeof e === 'string' ? {s: e} : e);   // Migration altes Format
+} catch (e) { BLOCKED = []; }
 
-function renderBlockChips() {
-  const box = document.getElementById('blockChips');
+function entryLabel(e) {
+  if (e.f || e.t) return `${e.s} (Nr. ${e.f || '?'}–${e.t || '?'})`;
+  return `${e.s} (ganze)`;
+}
+
+function renderBlockList() {
+  const box = document.getElementById('blockList');
   box.innerHTML = '';
-  for (const name of BLOCKED) {
-    const chip = document.createElement('span');
-    chip.style.cssText = 'background:#5a2d2d;color:#ffb3b3;padding:3px 8px;border-radius:10px;font-size:11px;display:inline-flex;align-items:center;gap:4px;';
-    chip.textContent = '🚧 ' + name;
-    const x = document.createElement('span');
-    x.textContent = '✕';
-    x.style.cursor = 'pointer';
-    x.onclick = () => { BLOCKED = BLOCKED.filter(n => n !== name); saveBlocked(); };
-    chip.appendChild(x);
-    box.appendChild(chip);
+  for (const e of BLOCKED) {
+    const row = document.createElement('div');
+    row.className = 'blockEntry';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = '🚧 ' + entryLabel(e);
+    const del = document.createElement('span');
+    del.className = 'del';
+    del.textContent = '✕';
+    del.title = 'Blockierung entfernen';
+    del.onclick = () => {
+      BLOCKED = BLOCKED.filter(x => x !== e);
+      saveBlocked();
+    };
+    row.appendChild(nm);
+    row.appendChild(del);
+    box.appendChild(row);
   }
   document.getElementById('blockCount').textContent = BLOCKED.length;
 }
+
 function saveBlocked() {
   localStorage.setItem('blockedStreets', JSON.stringify(BLOCKED));
-  renderBlockChips();
+  renderBlockList();
 }
-function addBlocked(name) {
-  name = (name || '').trim();
-  if (!name) return;
-  if (!BLOCKED.some(n => n.toLowerCase() === name.toLowerCase())) {
-    BLOCKED.push(name);
+
+function addBlocked() {
+  const s = document.getElementById('blockInput').value.trim();
+  if (!s) { setResult('Bitte eine Straße angeben.'); return; }
+  const f = document.getElementById('blockFrom').value.trim();
+  const t = document.getElementById('blockTo').value.trim();
+  if ((f || t) && !(f && t)) { setResult('Bitte „von" und „bis" zusammen angeben (oder beides leer).'); return; }
+  if (!BLOCKED.some(x => x.s.toLowerCase() === s.toLowerCase()
+                         && (x.f || '') === f && (x.t || '') === t)) {
+    BLOCKED.push(f || t ? {s, f, t} : {s});
     saveBlocked();
   }
   document.getElementById('blockInput').value = '';
+  document.getElementById('blockFrom').value = '';
+  document.getElementById('blockTo').value = '';
   document.getElementById('sugBlock').style.display = 'none';
+  setResult(`Blockiert: ${entryLabel(BLOCKED[BLOCKED.length - 1])}`);
 }
-document.getElementById('btnBlockToggle').onclick = () => {
-  const box = document.getElementById('blockBox');
-  const open = box.style.display === 'none';
-  box.style.display = open ? '' : 'none';
-  document.getElementById('btnBlockToggle').textContent =
-    `🚧 Blockierungen (${BLOCKED.length}) ${open ? '▴' : '▾'}`;
-};
-document.getElementById('btnBlockAdd').onclick = () => addBlocked(document.getElementById('blockInput').value);
+
+document.getElementById('btnBlockAdd').onclick = addBlocked;
 document.getElementById('blockInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); addBlocked(e.target.value); }
+  if (e.key === 'Enter') { e.preventDefault(); addBlocked(); }
 });
+document.getElementById('btnBlockToggle').onclick = () => {
+  const p = document.getElementById('blockPanel');
+  p.style.display = p.style.display === 'none' ? '' : 'none';
+};
+
 (function() {
   const input = document.getElementById('blockInput');
   const sug = document.getElementById('sugBlock');
@@ -503,7 +543,7 @@ document.getElementById('blockInput').addEventListener('keydown', e => {
       for (const name of list) {
         const d = document.createElement('div');
         d.textContent = '🚧 ' + name;
-        d.onclick = (e) => { e.stopPropagation(); addBlocked(name); };
+        d.onclick = (e) => { e.stopPropagation(); input.value = name; sug.style.display = 'none'; };
         sug.appendChild(d);
       }
       sug.style.display = list.length ? 'block' : 'none';
@@ -512,7 +552,7 @@ document.getElementById('blockInput').addEventListener('keydown', e => {
   input.addEventListener('blur', () => setTimeout(() => sug.style.display = 'none', 200));
   sug.addEventListener('click', e => e.stopPropagation());
 })();
-renderBlockChips();
+renderBlockList();
 
 // --- Routing ---
 const ARROW_SPACING_M = 600;
@@ -558,8 +598,8 @@ async function berechne(pushHash = true) {
     setResult('Mindestens Start und Ziel (2 Punkte) nötig.');
     return;
   }
-  const q = 'points=' + pts.map(p => p[0] + ',' + p[1]).join(';') + '&mode=' + MODE;
-  if (BLOCKED.length) q += '&blocked=' + encodeURIComponent(BLOCKED.join(';'));
+  let q = 'points=' + pts.map(p => p[0] + ',' + p[1]).join(';') + '&mode=' + MODE;
+  if (BLOCKED.length) q += '&blocked=' + encodeURIComponent(JSON.stringify(BLOCKED));
   setResult('<div style="display:flex;align-items:center;gap:8px;"><div class="spinner" style="width:18px;height:18px;border-width:3px;"></div> Lade Route…</div>');
   let data;
   try {
@@ -605,7 +645,7 @@ async function berechne(pushHash = true) {
     rows += `<div class="warn">🚧 Umgangen: ${escapeHtml(data.blocked_applied.join(', '))} (${data.blocked_edges} Kanten)</div>`;
   }
   if (data.blocked_ignored && data.blocked_ignored.length) {
-    rows += `<div class="hint">⚠ Nicht gefunden: ${escapeHtml(data.blocked_ignored.join(', '))}</div>`;
+    rows += `<div class="hint">⚠ Ignoriert: ${escapeHtml(data.blocked_ignored.map(b => `${b.s} — ${b.grund}`).join('; '))}</div>`;
   }
   rows += `<button id="toggleDetails" style="font-size:11px;padding:3px 6px;margin:4px 0;width:auto;">Details ▾</button>`;
   rows += `<div id="detailsBox">`;

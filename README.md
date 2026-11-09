@@ -82,17 +82,21 @@ class default. No turn-penalties, no traffic profiles.
 
 ### Blocked streets (Baustellen / Stau)
 
-`/route?...&blocked=Name1;Name2` — streets are blocked by **exact normalized
-name** (ß/ss-folded), resolved to edge-ids via the per-edge `name` metadata.
-Dijkstra skips those edges during expansion; the blocklist lives client-side
-(localStorage) and rides along with every request — no server state.
+`/route?...&blocked=<JSON array>` — entries are `{"s": "Street", "f": "1", "t": "15"}`
+(`f`/`t` optional house-number range, also one-sided). Resolution:
 
-- Response reports `blocked_applied` (matched names + `blocked_edges` count)
-  and `blocked_ignored` (names with no edge match).
-- If the blocklist disconnects start/target, the API answers with
-  *"Ziel nicht erreichbar – Blockierungen zu restriktiv?"* instead of hanging.
-- Granularity is street-wide (all edges sharing the name), which matches the
-  "Baustelle in Straße X" use case.
+- **Whole street** (no `f`/`t`): every edge whose normalized name matches.
+- **Partial segment**: address points of that street whose house number
+  (leading integer, `12a` → 12) falls in the range are snapped to the nearest
+  edge of the same street (`BLOCK_SNAP_M = 30`); only those edges are blocked.
+  Works wherever OSM has `addr:housenumber` data — otherwise the entry is
+  reported as ignored ("keine Adressen im Nummernbereich"), never silently skipped.
+
+Dijkstra skips blocked edges during expansion; the blocklist lives client-side
+(right-side 🚧 panel, localStorage) and rides along with every request — no
+server state. Response reports `blocked_applied`, `blocked_ignored` (with reason)
+and `blocked_edges`. If the blocklist disconnects start/target, the API answers
+*"Ziel nicht erreichbar – Blockierungen zu restriktiv?"* instead of hanging.
 
 ### Cost function
 

@@ -14,6 +14,7 @@ import heapq
 import math
 import os
 import pickle
+import re
 import socket
 import ssl
 import subprocess
@@ -249,31 +250,107 @@ def _norm(s):
     return s.replace("ß", "ss").replace("ẞ", "ss").lower()
 
 
-def blocked_edge_ids(mode, names):
-    """Liefert (ids_set, applied, ignored) für eine Liste von Straßennamen.
-    Exakter Match auf den normalisierten Kantennamen (meta[e][1]).
-    meta ist listenindiziert: Listenindex == edge_id.
-    Ergebnis wird pro (mode, names) gecacht."""
+BLOCK_SNAP_M = 30.0   # Abstand-Schwellwert Adresse -> Kante (Teilabschnitt)
+
+
+def _hnr_int(hnr):
+    """Führenden Integer aus Hausnummer ('12a' -> 12, '3-5' -> 3)."""
+    m = re.match(r"\s*(\d+)", hnr or "")
+    return int(m.group(1)) if m else None
+
+
+def _point_seg_dist(px, py, ax, ay, bx, by):
+    """Abstand Punkt -> Strecke (a,b) in Meter (EPSG:25833)."""
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _address_points_in_range(street, f, t):
+    """Adresspunkte der Straße, deren Hausnummer im Bereich [f, t] liegt
+    (None = offen). Liefert [(x, y)] in EPSG:25833."""
+    con = duckdb.connect(DEPOT_DB, read_only=True)
+    norm_col = "lower(replace(replace(strasse, 'ß', 'ss'), 'ẞ', 'ss'))"
+    rows = con.execute(f"""
+        SELECT hnr, lon, lat FROM adressen WHERE {norm_col} = ?""",
+        [_norm(street)]).fetchall()
+    con.close()
+    pts = []
+    for hnr, lon, lat in rows:
+        n = _hnr_int(hnr)
+        if n is None:
+            continue
+        if f is not None and n < f:
+            continue
+        if t is not None and n > t:
+            continue
+        pts.append((lon, lat))
+    # einmal transformieren (eine Verbindung, viele Punkte)
+    out = []
+    con = duckdb.connect()
+    con.execute("LOAD spatial;")
+    for lon, lat in pts:
+        x, y = con.execute("""
+            SELECT ST_X(p), ST_Y(p) FROM (SELECT ST_Transform(
+                ST_SetCRS(ST_MakePoint(?, ?), 'EPSG:4326'), 'EPSG:25833', true) p)""",
+            [lon, lat]).fetchone()
+        out.append((x, y))
+    con.close()
+    return out
+
+
+def blocked_edge_ids(mode, entries):
+    """Löst Block-Einträge zu Kanten-IDs auf.
+    entries: Liste {s, f?, t?} — s = Straßenname, f/t = Hausnummer von/bis.
+    Ohne f/t: alle Kanten mit exakt normalisiertem Namen.
+    Mit f/t: Adresspunkte im Nummernbereich -> Kanten derselben Straße
+    innerhalb BLOCK_SNAP_M um einen Punkt.
+    Liefert (ids_set, applied_labels, ignored [{s, grund}])."""
     st = STATE.get(mode)
-    if not st or not names:
-        return set(), [], list(names)
-    key = tuple(sorted(_norm(n) for n in names))
-    cache = st.setdefault("blocked_cache", {})
-    if key in cache:
-        return cache[key]
-    want = {_norm(n) for n in names}
-    ids, applied, seen = set(), [], set()
-    for i, e in enumerate(st["meta"]):
-        nm = _norm(e[1] or "")
-        if nm in want:
-            ids.add(i)
-            if nm not in seen:
-                seen.add(nm)
-                applied.append(e[1])
-    ignored = [n for n in names if _norm(n) not in seen]
-    result = (ids, applied, ignored)
-    cache[key] = result
-    return result
+    if not st:
+        return set(), [], [{"s": e.get("s", "?"), "grund": "Graph nicht geladen."} for e in entries]
+    # Kanten per normalisiertem Namen indizieren (einmal pro Modus)
+    name_idx = st.setdefault("name_idx", {})
+    if not name_idx:
+        for i, e in enumerate(st["meta"]):
+            nm = _norm(e[1] or "")
+            if nm:
+                name_idx.setdefault(nm, []).append(i)
+    ids, applied, ignored = set(), [], []
+    for e in entries:
+        s = (e.get("s") or "").strip()
+        if not s:
+            continue
+        edge_list = name_idx.get(_norm(s), [])
+        if not edge_list:
+            ignored.append({"s": s, "grund": "kein Namens-Treffer"})
+            continue
+        f_raw, t_raw = (e.get("f") or "").strip(), (e.get("t") or "").strip()
+        if not f_raw and not t_raw:
+            ids.update(edge_list)
+            applied.append(f"{s} (ganze)")
+            continue
+        f = _hnr_int(f_raw) if f_raw else None
+        t = _hnr_int(t_raw) if t_raw else None
+        span = f"Nr. {f_raw or '?'}–{t_raw or '?'}"
+        pts = _address_points_in_range(s, f, t)
+        if not pts:
+            ignored.append({"s": f"{s} ({span})", "grund": "keine Adressen im Nummernbereich"})
+            continue
+        before = len(ids)
+        for i in edge_list:
+            u, v = st["edges"][i][0], st["edges"][i][1]
+            if any(_point_seg_dist(px, py, u[0], u[1], v[0], v[1]) <= BLOCK_SNAP_M
+                   for px, py in pts):
+                ids.add(i)
+        if len(ids) == before:
+            ignored.append({"s": f"{s} ({span})", "grund": "keine Kante im Umkreis der Adressen"})
+        else:
+            applied.append(f"{s} ({span})")
+    return ids, applied, ignored
 
 
 def geocode(q):
@@ -405,18 +482,29 @@ class Handler(BaseHTTPRequestHandler):
             if not st:
                 self._json({"error": "Graph wird geladen…", "loading": True}, 503)
                 return
-            # Straßen-Blockierungen (Bauarbeiten/Stau): Namen -> edge_ids
-            blocked_raw = [n for n in q.get("blocked", [""])[0].split(";") if n.strip()]
-            blocked_ids, applied, ignored = (None, [], [])
-            if blocked_raw:
-                blocked_ids, applied, ignored = blocked_edge_ids(mode, blocked_raw)
-                blocked_meta = {
-                    "blocked_applied": applied,
-                    "blocked_ignored": ignored,
-                    "blocked_edges": len(blocked_ids),
-                }
-            else:
-                blocked_meta = {}
+            # Straßen-Blockierungen (Bauarbeiten/Stau): JSON-Liste {s, f?, t?}
+            blocked_entries, blocked_meta, blocked_ids = [], {}, None
+            raw_blocked = q.get("blocked", [""])[0]
+            if raw_blocked.strip():
+                try:
+                    arr = json.loads(raw_blocked)
+                    if not isinstance(arr, list):
+                        raise ValueError("JSON-Liste erwartet")
+                    blocked_entries = [e for e in arr
+                                       if isinstance(e, dict) and (e.get("s") or "").strip()]
+                except (ValueError, json.JSONDecodeError) as e:
+                    self._json({"error": f"Ungültiges blocked-Format: {e}"}, 400)
+                    return
+                try:
+                    blocked_ids, applied, ignored = blocked_edge_ids(mode, blocked_entries)
+                    blocked_meta = {
+                        "blocked_applied": applied,
+                        "blocked_ignored": ignored,
+                        "blocked_edges": len(blocked_ids),
+                    }
+                except Exception as e:
+                    self._json({"error": f"Blockierung konnte nicht aufgelöst werden: {e}"}, 500)
+                    return
             try:
                 if "points" in q:
                     pts = []

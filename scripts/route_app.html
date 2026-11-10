@@ -140,8 +140,8 @@ const baseOsm = L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png',
 L.control.layers({'Esri Dunkel': baseEsri, 'OpenStreetMap (DE)': baseOsm},
                  {}, {collapsed:true}).addTo(map);
 
+let blockLayer = L.layerGroup().addTo(map);   // persistente 🚧-Linien (unabhängig von Routen)
 let lineLayer = L.layerGroup().addTo(map);
-let blockLayer = L.layerGroup().addTo(map);   // persistente 🚧-Punkte (unabhängig von Routen)
 const PICK = {};
 const DIRTY = {};
 let markers = {};
@@ -500,7 +500,7 @@ function saveBlocked() {
   refreshBlockedOnMap();
 }
 
-// Rote Punkte für blockierte Teilabschnitte — unabhängig von Routen (blockLayer)
+// Blockierte Teilabschnitte als rote Linien — unabhängig von Routen (blockLayer)
 async function refreshBlockedOnMap() {
   blockLayer.clearLayers();
   if (!BLOCKED.length) return;
@@ -509,15 +509,11 @@ async function refreshBlockedOnMap() {
                             encodeURIComponent(JSON.stringify(BLOCKED)));
     if (!res.ok) return;
     const d = await res.json();
-    const renderer = L.canvas({ padding: 0.5 });
-    for (const [lat, lon] of (d.dots || [])) {
-      L.circleMarker([lat, lon], {
-        renderer,
-        radius: 4, color: '#ffffff', weight: 1,
-        fillColor: '#ff1744', fillOpacity: 0.95,
-      }).addTo(blockLayer).bindTooltip('🚧 Blockiert');
+    for (const b of (d.blocked || [])) {
+      L.polyline(b.segments, {color: '#ff1744', weight: 5, opacity: 0.9})
+        .addTo(blockLayer).bindTooltip('🚧 ' + b.label);
     }
-  } catch (e) { /* still store lassen */ }
+  } catch (e) { /* still lassen */ }
 }
 
 function addBlocked() {

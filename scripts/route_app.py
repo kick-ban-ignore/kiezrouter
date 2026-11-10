@@ -246,9 +246,18 @@ def route_payload_multi(points, mode="car", blocked_ids=None, blocked_meta=None)
     }
 
 
+def _entry_label(e):
+    """Menschliche Bezeichnung eines Block-Eintrags."""
+    s = (e.get("s") or "").strip()
+    f, t = (e.get("f") or "").strip(), (e.get("t") or "").strip()
+    if f or t:
+        return f"{s} (Nr. {f or '?'}–{t or '?'})"
+    return f"{s} (ganze)"
+
+
 def blocked_geo(mode, entries):
-    """Blockierte Teilabschnitte als Punkte (Kanten-Mittelpunkte) für die
-    Karten-Anzeige. Liefert (dots [[lat, lon]], applied, ignored, n_edges)."""
+    """Blockierte Kanten als Liniensegmente (WGS84) für die Karten-Anzeige.
+    Liefert ([{label, segments}, …], applied, ignored, n_edges)."""
     st = STATE.get(mode)
     if not st:
         return [], [], [], 0
@@ -257,24 +266,38 @@ def blocked_geo(mode, entries):
                        for e in entries))
     cache = st.setdefault("blocked_geo_cache", {})
     if key in cache:
-        dots = cache[key]
-        return dots, applied, ignored, len(ids)
-    mids = []
-    for i in sorted(ids):
-        u, v = st["edges"][i][0], st["edges"][i][1]
-        mids.append(((u[0] + v[0]) / 2.0, (u[1] + v[1]) / 2.0))
+        return cache[key], applied, ignored, len(ids)
+    name_idx = st.setdefault("name_idx", {})
     con = duckdb.connect()
     con.execute("LOAD spatial;")
-    dots = []
-    for x, y in mids:
-        lon, lat = con.execute("""
-            SELECT ST_X(p), ST_Y(p) FROM (SELECT ST_Transform(
-                ST_SetCRS(ST_MakePoint(?, ?), 'EPSG:25833'), 'EPSG:4326', true) p)""",
-            [x, y]).fetchone()
-        dots.append([lat, lon])
+    node_cache = {}
+
+    def node_ll(node):
+        if node not in node_cache:
+            x, y = node
+            lon, lat = con.execute("""
+                SELECT ST_X(p), ST_Y(p) FROM (SELECT ST_Transform(
+                    ST_SetCRS(ST_MakePoint(?, ?), 'EPSG:25833'), 'EPSG:4326', true) p)""",
+                [x, y]).fetchone()
+            node_cache[node] = (lat, lon)
+        return node_cache[node]
+
+    out = []
+    for e in entries:
+        s = (e.get("s") or "").strip()
+        if not s:
+            continue
+        segs = []
+        for i in name_idx.get(_norm(s), []):
+            if i not in ids:
+                continue
+            u, v = st["edges"][i][0], st["edges"][i][1]
+            segs.append([list(node_ll(u)), list(node_ll(v))])
+        if segs:
+            out.append({"label": _entry_label(e), "segments": segs})
     con.close()
-    cache[key] = dots
-    return dots, applied, ignored, len(ids)
+    cache[key] = out
+    return out, applied, ignored, len(ids)
 
 
 def _norm(s):
@@ -362,7 +385,7 @@ def blocked_edge_ids(mode, entries):
         f_raw, t_raw = (e.get("f") or "").strip(), (e.get("t") or "").strip()
         if not f_raw and not t_raw:
             ids.update(edge_list)
-            applied.append(f"{s} (ganze)")
+            applied.append(_entry_label(e))
             continue
         f = _hnr_int(f_raw) if f_raw else None
         t = _hnr_int(t_raw) if t_raw else None
@@ -522,7 +545,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": f"Ungültiges blocked-Format: {e}"}, 400)
                     return
             dots, applied, ignored, n = blocked_geo(mode, entries)
-            self._json({"dots": dots, "blocked_applied": applied,
+            self._json({"blocked": dots, "blocked_applied": applied,
                         "blocked_ignored": ignored, "blocked_edges": n})
             return
         if parse.path == "/route":

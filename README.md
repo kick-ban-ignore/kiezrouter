@@ -5,7 +5,7 @@
 [![Leaflet](https://img.shields.io/badge/Leaflet-1.9.3-199900.svg)](https://leafletjs.com/)
 [![DuckDB](https://img.shields.io/badge/DuckDB-Spatial-FFF000.svg)](https://duckdb.org/)
 
-Local and open-source web map for route planning in Berlin. Plan routes by car or on foot, add multiple stops, search addresses and U-/S-Bahn stations, block streets, and export routes. Easy.
+Local, open-source, un-googled web map for route planning in Berlin. Plan routes by car or on foot, add multiple stops, search addresses and U-/S-Bahn stations, block streets, and export routes. Easy.
 
 <img width="1648" height="833" alt="Screenshot 2026-11-10 at 03-37-36 KiezRouter – Berlin" src="https://github.com/user-attachments/assets/db474078-3fc1-4d71-bc4f-f7a17543dcd1" />
 

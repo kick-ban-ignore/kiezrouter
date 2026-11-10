@@ -5,7 +5,9 @@
 [![Leaflet](https://img.shields.io/badge/Leaflet-1.9.3-199900.svg)](https://leafletjs.com/)
 [![DuckDB](https://img.shields.io/badge/DuckDB-Spatial-FFF000.svg)](https://duckdb.org/)
 
-Interactive web map for route planning in Berlin. Plan routes by car or on foot, add multiple stops, search addresses and U-/S-Bahn stations, block streets or partial street segments due to construction/traffic, and export routes.
+Local and open-source web map for route planning in Berlin. Plan routes by car or on foot, add multiple stops, search addresses and U-/S-Bahn stations, block streets, and export routes. Easy.
+
+<img width="1648" height="833" alt="Screenshot 2026-11-10 at 03-37-36 KiezRouter – Berlin" src="https://github.com/user-attachments/assets/db474078-3fc1-4d71-bc4f-f7a17543dcd1" />
 
 ## Features
 
@@ -16,7 +18,6 @@ Interactive web map for route planning in Berlin. Plan routes by car or on foot,
 - **GPS start** – Use your current location (works over HTTPS)
 - **Share & export** – Shareable URLs, copy link, GPX export
 - **Mobile friendly** – Responsive bottom sheet layout
-- **LAN/HTTPS support** – Access from other devices on your network with GPS support
 
 ## Quick Start
 
@@ -27,9 +28,6 @@ Interactive web map for route planning in Berlin. Plan routes by car or on foot,
 ### Setup
 
 ```bash
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
 
 # Build address and station indexes (requires data)
@@ -51,16 +49,7 @@ python scripts/route_app.py
 python scripts/route_app.py --https
 ```
 
-Open [http://localhost:8777](http://localhost:8777) or [https://<your-ip>:8443](https://<your-ip>:8443).
-
-## Usage
-
-1. Enter start and destination (or use GPS)
-2. Add stops if needed by clicking "+ Stop hinzufügen"
-3. Select car or foot mode
-4. Click "Route berechnen" to get the route
-5. Use the "🚧 Blockierungen" panel on the right to block streets/segments
-6. Blocked segments appear as red lines on the map even without a route
+Open [https://localip:8443](https://localip:8443).
 
 ## Data
 
@@ -75,3 +64,5 @@ Required in `data/berlin/`:
 - **Backend:** Python, DuckDB
 - **Frontend:** Vanilla JavaScript, Leaflet
 - **Routing:** Dijkstra's algorithm on OSM road network
+
+This application was developed by [Max](https://github.com/kick-ban-ignore) in Berlin with ❤️ and ☕ and Kong Strong🧃.
